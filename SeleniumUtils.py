@@ -60,13 +60,21 @@ def get_top_download(driver):
     curr_down = curr_down.find_element(value="frb0")
     return curr_down
 
+def init_bare_driver():
+    options = selenium.webdriver.ChromeOptions()
+    options.add_argument("--no-sandbox")  # apparently this is very insecure, but it should be okay
+    options.add_argument("disable-infobars")
+    options.add_argument(r"user-data-dir=" + str(append_cur_dir("cookies", "testing0")))
+    return selenium.webdriver.Chrome(options=options)  # program may get stuck here if it can't get enough resources
+
 def initialize_driver(down_dir=append_cur_dir("Downloads")):
     # ensure files downloaded to correct location
+    # this will likely cause images to load incorrectly
     options = selenium.webdriver.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-setuid-sandbox")
 
-    options.add_argument("--remote-debugging-port=9222")  # this
+    options.add_argument("--remote-debugging-port=9222")
 
     options.add_argument("--disable-dev-shm-using")
     options.add_argument("--disable-extensions")
@@ -74,6 +82,8 @@ def initialize_driver(down_dir=append_cur_dir("Downloads")):
     options.add_argument("start-maximized")
     options.add_argument("disable-infobars")
     options.add_argument(r"user-data-dir=.\cookies\\test")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36")
 
     # second pref stops images from loading
     prefs = {"download.default_directory": down_dir}  #, "profile.managed_default_content_settings.images": 2}

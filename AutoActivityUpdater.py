@@ -68,7 +68,7 @@ def activity_updater():
                 links.append(line[prev_sep_end : len(separator)])
 
     print("All links collected: \n", links)
-    driver = initialize_driver()
+    driver = init_bare_driver()  # allows images to load properly so they can be selected
 
     for link in links:
         print("Beginning processing of: " + link)
@@ -83,26 +83,81 @@ def activity_updater():
 
         robots = wait_and_get_vis_vals(driver, "//li[@class=\'robotItem relative \']", by_val=By.XPATH)
         print(robots)
+
+        # set the models
         for index in range(0, len(robots)):
             print("Beginning on robot " + str(index + 1))
-            robot = robots[index]
+            robot = robots[index]  # they should be in order
+            robot.find_element(By.TAG_NAME, "button").click()  # select robot
 
             # attempt to bypass opening model menu and associated issues of clickable image not loading
-            image = robot.find_element(by=By.CSS_SELECTOR, value="img")  # select this robot
-            model_path = "/img/models/" + model + ".png"
-            driver.execute_script("arguments[0].setAttribute(\"src\", \"" + model_path + "\")", image)
-            sleep(15)
+            #image = robot.find_element(by=By.CSS_SELECTOR, value="img")
+            #model_path = "/img/models/" + model + ".png"
+            #driver.execute_script("arguments[0].setAttribute(\"src\", \"" + model_path + "\")", image)
 
-            #wait_for_vis(driver, "robotModel" + str(index + 1), by_val=By.ID).click()  # open model selection
-            #image = wait_and_get(driver, "//img[@value=\'" + model + "\']", 10, by_val=By.XPATH)  # select model
-            #wait_for_vis(driver, "closeButton", by_val=By.ID).click()  # close the menu
+            wait_for_vis(driver, "robotModel" + str(index + 1), by_val=By.ID).click()  # open model selection
+            image = wait_for_vis(driver, "//img[@value=\'" + model + "\']", 10, by_val=By.XPATH).click()  # select model
+            wait_for_vis(driver, "closeButton", by_val=By.ID).click()  # close the menu
             print("Finished robot " + str(index + 1))
 
             # last line of robot processing
         print("Finished processing all robots; preparing to save.")
         robot_button.click()  # close the robot menu
         wait_for_vis(driver, "saveTab", by_val=By.ID).click()  # open the save menu
-          # save the activity - requires editor
+
+        buttons = wait_for_vis(driver,
+                     "//div[@class=\'jconfirm-buttons\']",
+                     by_val=By.XPATH).find_elements(By.XPATH, "button[@type=\'button\']")
+
+        # should only be one element found
+        for button in buttons:
+            # click on update activity
+            if button.text == "Update Activity":
+                button.click()
+                break
+
+        # get all the buttons because of issues with xpath locating elements via text
+        all_buttons = wait_and_get_vis_vals(driver,
+                     "//div[@class=\'jconfirm-buttons\']",
+                     by_val=By.XPATH)  # click submit
+
+        # click on the submit button
+        for buttons_parent in all_buttons:
+            found_button = False
+            buttons = buttons_parent.find_elements(By.XPATH, "button[@type=\'button\']")
+            for button in buttons:
+                # if this is a submit button, click it
+                if button.text == "Submit":
+                    button.click()
+                    found_button = True
+                    break
+
+            if found_button: break
+
+        # get all the buttons since xpath is not playing nice with finding text values
+        all_buttons = wait_and_get_vis_vals(driver, "//div[@class=\'jconfirm-buttons\']",
+                     by_val=By.XPATH)  # close the confirmation prompt
+
+        # try to find and click the only single close button
+        # click on the submit button
+        for buttons_parent in all_buttons:
+            buttons = buttons_parent.find_elements(By.XPATH, "button[@type=\'button\']")
+            if len(buttons) != 1: continue
+            if buttons[0].text != "Close": continue
+            buttons[0].click()
+            break
+
+        # this close button should now again be the only one present
+        buttons = wait_for_vis(driver,
+                                      "//div[@class=\'jconfirm-buttons\']",
+                                      by_val=By.XPATH).find_elements(By.XPATH, "button[@type=\'button\']")
+
+        # should only be one element found
+        for button in buttons:
+            # click on update activity
+            if button.text == "Close":
+                button.click()
+                break
 
         print("Finished: " + link)
         # last line of link processing
