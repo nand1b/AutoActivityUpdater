@@ -136,7 +136,7 @@ def parse_by_links(model, location, separator):
 
     # used to avoid re-doing previously computed work
     #3244 doesn't have any robots
-    start_from_link = "https://roboblocky.com/u/3244.php"
+    start_from_link = "https://roboblocky.com/u/3693.php"
     if start_from_link is not None:
         for i in range(0, len(links)):
             if links[i] == start_from_link:
