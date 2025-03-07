@@ -9,16 +9,35 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-def wait_for_vis(driver, target_id, timeout=10, by_val=By.CSS_SELECTOR):
+global_timeout = 10  # sometimes pages need a long time to load or for a connection to re-stabilize
+
+# assumes an element has already been confirmed present
+def ensure_in_view(driver, element : WebElement, timeout=global_timeout):
+    wait = WebDriverWait(driver, timeout)
+    ActionChains(driver).scroll_to_element(element)
+    ret = wait.until(EC.visibility_of(element))
+    return ret
+
+def goto_and_click(driver, target_id, by_val=By.XPATH, timeout=global_timeout):
+    element = wait_for_vis(driver, target_id, timeout, by_val)
+    ActionChains(driver).scroll_to_element(element)
+    WebDriverWait(driver, global_timeout).until(EC.element_to_be_clickable(element))
+    wait_for_vis(driver, target_id, timeout, by_val).click()  # apparently we need to relocate it
+
+def wait_for_vis(driver, target_id, timeout=global_timeout, by_val=By.CSS_SELECTOR):
     wait = WebDriverWait(driver, timeout)
     ret = wait.until(EC.visibility_of_element_located((by_val, target_id)))
     return ret
 
-def wait_and_get(driver, target_id, timeout=10, by_val=By.ID):
+def wait_and_get(driver, target_id, timeout=global_timeout, by_val=By.ID):
     wait = WebDriverWait(driver, timeout)
     return wait.until(EC.presence_of_element_located( (by_val, target_id) ))
 
-def wait_and_get_vis_vals(driver, target_id, timeout=10, by_val=By.ID):
+def wait_and_gets(driver, target_id, timeout=global_timeout, by_val=By.ID):
+    wait = WebDriverWait(driver, timeout)
+    return wait.until(EC.presence_of_all_elements_located((by_val, target_id)))
+
+def wait_for_viss(driver, target_id, timeout=global_timeout, by_val=By.ID):
     wait = WebDriverWait(driver, timeout)
     return wait.until(EC.visibility_of_all_elements_located( (by_val, target_id) ))
 
@@ -26,7 +45,7 @@ def make_selection(driver, list_name, visible_choice):
     select = Select(wait_and_get(driver, list_name))
 
     # wait for option to be present or timeout
-    wait = WebDriverWait(driver, 10)
+    wait = WebDriverWait(driver, global_timeout)
     is_choice_present = lambda d : is_option_present(select, visible_choice)
     wait.until(is_choice_present)
 
