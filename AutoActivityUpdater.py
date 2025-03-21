@@ -121,7 +121,41 @@ def update_models(driver, link, model):
     # we don't bother manually closing since its far more consistent to just navigate to the next page
     print("Finished: " + link)
 
-def parse_by_links(model, location, separator):
+# converts x^y to pow(x, y)
+def update_pow_expr(expression : str):
+    # update the format to match what is desired
+    return expression
+
+# will try to replace x^y in drive expressions with pow(x, y) [never in pre or post board]
+def replace_drive_pow(driver, link, info):
+    # open the link
+    driver.get(link)
+
+    # locate each drive in order
+        # locate occurrences of x^y
+        # update occurrences to desired form
+
+# will try to replace x^y in draw expressions with pow(x, y)
+def replace_draw_pow(driver, link, info):
+    # open the link
+    driver.get(link)
+
+    # iterate through solution, pre, and post board
+        # iterate through all draw lines based on expression blocks
+            # Update the expression
+
+def get_action(action_name : str):
+    if action_name.upper() == "REPLACE_DRIVE_POW":
+        return replace_drive_pow
+    elif action_name.upper() == "REPLACE_DRAW_POW":
+        return replace_draw_pow
+
+    return update_models
+
+def get_action_link(action_name: str):
+    return ""
+
+def parse_by_links(action, info, location, separator):
     links : list[str] = parse_out_links(location, separator)
 
     driver = init_bare_driver()  # allows images to load properly so they can be selected
@@ -148,16 +182,19 @@ def parse_by_links(model, location, separator):
     for link in links:
         link_index += 1
         print("On link " + str(link_index) + "/" + str(len(links)))
-        try:
-            update_models(driver, link, model)
-        except Exception as error:
-            print("Got error on link: " + link + "<" + str(link_index) + "/" + str(len(links)) + "> of: \n", error)
-            print("Trying to run on link one more time")
-            update_models(driver, link, model)  # try again
-            #print("Navigate to a new webpage to continue process")
-            #while driver.current_url == link:
-                #driver.implicitly_wait(5)
-        # last line of link processing
+        succeeded = False
+        while not succeeded:
+            try:
+                update_models(driver, link, info)
+                succeeded = True
+            except Exception as error:
+                print("Got error on link: " + link + "<" + str(link_index) + "/" + str(len(links)) + "> of: \n", error)
+                print("Trying to run on this link again")
+                #update_models(driver, link, info)  # try again
+                #print("Navigate to a new webpage to continue process")
+                #while driver.current_url == link:
+                    #driver.implicitly_wait(5)
+            # last line of link processing
 
     print("Finished processing all links")
 
@@ -166,7 +203,7 @@ def go_to_curriculum(driver, grade_index):
     grade = row.find_elements(By.TAG_NAME, "a")[grade_index % 4]
     ActionChains(driver).scroll_to_element(grade).click()
 
-def parse_by_grades(model, grades, chapters : list[int] | None):
+def parse_by_grades(action, info, grades, chapters : list[int] | None):
     driver = init_bare_driver()
     curriculum = "https://roboblocky.com/curriculum/"
 
@@ -184,13 +221,17 @@ def parse_by_grades(model, grades, chapters : list[int] | None):
         if chapters is None: chapter = range(0, len(chapter_elements))
         for ch_index in chapters:
 
-            chapter = wait_and_gets()
+            # chapter = wait_and_gets()
 
             # reset page
             go_to_curriculum(driver, grade + 1)
 
 def parse_args():
     parser = ArgumentParser("AutomaticActivityUpdater")
+    parser.add_argument("--action",
+                        help="The action you want the updater to perform out of its known list of actions.",
+                        type=str,
+                        required=False)
     parser.add_argument("--file",
                         help="A text file absolute path argument is expected. If this isn't provided, <exec>/data/links.txt/csv is used.",
                         type=str,
@@ -199,8 +240,8 @@ def parse_args():
                         help="If a separator is used, indicate it. Line ends are included.",
                         type=str,
                         required=False)
-    parser.add_argument("--model",
-                        help="The name of the model to be used (ensure proper capitalization).",
+    parser.add_argument("--info",
+                        help="The information to use for the given action (model name, etc).",
                         required=False)
     parser.add_argument("--grades",
                         help="The grade levels to be targeted by the automatic robot searcher.",
@@ -216,7 +257,8 @@ def activity_updater():
     args = parse_args()
     location = args.file
     separator = args.sep
-    model = args.model
+    info = args.info
+    action = args.action
 
     # for now these are just hard set rather than command line
     grades = None # args.grades  -1 -> 16 inclusive range
@@ -224,21 +266,24 @@ def activity_updater():
 
     # if the supplied location is invalid, we will use the default
     if location is None or not os.path.exists(location):
-        location = append_cur_dir("Data", "links.txt")
+        def_link_file_name = "links"  # set the default link file name manually
+        location = append_cur_dir("Data", def_link_file_name + ".txt")
 
         # try to get .csv file
         if not os.path.exists(location):
-            location = append_cur_dir("Data", "links.csv")
+            location = append_cur_dir("Data", def_link_file_name + ".csv")
             separator = ","
             if not os.path.exists(location): return
 
-    if model is None: model = "LinkbotFace"
+    if info is None: info = "LinkbotFace"  # set default model manually
+
+    if action is None: action = "update_models"  # set default action manually
 
     # ---------------------- START PROCESSING -------------------------- #
 
-    if grades is None: parse_by_links(model, location, separator)
+    if grades is None: parse_by_links(action, info, location, separator)
     elif grades is not None:
-        parse_by_grades(model, grades, chapters)
+        parse_by_grades(action, info, grades, chapters)
 
     # end of updater
 
