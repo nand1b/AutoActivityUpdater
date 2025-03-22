@@ -1,3 +1,4 @@
+import string
 import traceback
 from argparse import ArgumentParser
 from time import sleep
@@ -95,10 +96,11 @@ def update_models(driver, link, model):
 
     try:
         # we try to quickly cause a throw if this is not a lesson
-        wait_and_get(driver, "//a[text()=\'Lesson Plan\']", by_val=By.XPATH, timeout=1)
+        wait_and_get(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
+                    by_val=By.XPATH, timeout=1)
         print("This is a lesson")
         goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
-                       by_val=By.XPATH)
+                    by_val=By.XPATH, timeout=5)
 
     except Exception as error:
         print("This is an activity")
@@ -121,10 +123,74 @@ def update_models(driver, link, model):
     # we don't bother manually closing since its far more consistent to just navigate to the next page
     print("Finished: " + link)
 
+# gets first and last index of operand characters
+def get_operand_bounds(expression, op_index, is_after):
+    # skip over whitespaces before power operator
+    operand_end = op_index  # will end on first non-whitespace character
+
+    # determine if we are going up or down (past or before) in expression relative to op
+    shift_dir = 0
+    paren_plus = None
+    paren_minus = None
+    if is_after:
+        # if we want following operand, it has the form: OP ( ... ), or: OP xxxx
+        shift_dir = 1
+        paren_plus = '('
+        paren_minus = ')'
+    else:
+        # if we want preceding operand, it has form: ( ... ) OP, or: xxxx OP
+        shift_dir = -1
+        paren_plus = ')'
+        paren_minus = '('
+
+    operand_end += shift_dir
+
+    # find the first non whitespace index
+    while string.whitespace.__contains__(expression[operand_end]):
+        operand_end += shift_dir
+
+    # find the start of the expression
+    operand_begin = 0
+    if expression[operand_end] == paren_plus:
+        curr_index = operand_end
+        paren_count = 1  # becomes zero when full parenthesis expression has been closed
+        # get to the end of the parenthesis statement
+        while paren_count > 0:
+            curr_index += shift_dir  # go in shift direction by one character
+            curr_char = expression[curr_index]
+            if curr_char == paren_plus: paren_count += 1
+            if curr_char == paren_minus: paren_count -= 1
+
+        operand_begin = curr_index
+    else:
+        # find the first space before expression
+        if is_after:
+            operand_begin = expression.find(' ', __start=op_index + 1) + 1
+        else:
+            operand_begin = expression.rfind(' ', __end=operand_end) + 1
+
+    return [operand_begin, operand_end]
+
 # converts x^y to pow(x, y)
 def update_pow_expr(expression : str):
     # update the format to match what is desired
-    return expression
+    pow_index = expression.find('^')
+    base_bounds : list[int] = get_operand_bounds(expression, pow_index, False)
+    power_bounds = get_operand_bounds(expression, pow_index, True)
+
+    base = expression[base_bounds[0] : base_bounds[1] + 1]
+    power = expression[power_bounds[0] : power_bounds[1] + 1]
+    operation = "pow(" + base + ", " + power + ")"
+
+    # strip out the power,
+    return expression[0 : base[0]] + operation + expression[power_bounds[1] + 1 : len(expression)]
+
+def update_pow_expressions(expression : str):
+    # continue to perform replacement on all power expressions until they are replaced
+    pow_index = expression.find('^')
+    while pow_index > -1:
+        expression = update_pow_expr(expression)
+        pow_index = expression.find('^')
 
 # will try to replace x^y in drive expressions with pow(x, y) [never in pre or post board]
 def replace_drive_pow(driver, link, info):
@@ -155,22 +221,21 @@ def get_action(action_name : str):
 def get_action_link(action_name: str):
     return ""
 
-def parse_by_links(action, info, location, separator):
-    links : list[str] = parse_out_links(location, separator)
-
+def parse_by_links(action, info, separator):
     driver = init_bare_driver()  # allows images to load properly so they can be selected
-    if len(links) < 1:
-        # get links from provided link page
-        driver.get("https://roboblocky.com/activity-portal/script_linkbotSymbol.php")
-        ensure_logged_in(driver)
+    links = []
 
-        link_elements = wait_and_gets(driver, "//a[@target=\'_blank\']", by_val=By.XPATH)
-        for element in link_elements:
-            links.append(element.get_attribute("href"))
+    # get links from provided link page
+    driver.get("https://roboblocky.com/activity-portal/script_linkbotSymbol.php")
+    ensure_logged_in(driver)
+
+    link_elements = wait_and_gets(driver, "//a[@target=\'_blank\']", by_val=By.XPATH)
+    for element in link_elements:
+        links.append(element.get_attribute("href"))
 
     # used to avoid re-doing previously computed work
     #3244 doesn't have any robots
-    start_from_link = "https://roboblocky.com/u/3693.php"
+    start_from_link = "https://roboblocky.com/u/10626.php"
     if start_from_link is not None:
         for i in range(0, len(links)):
             if links[i] == start_from_link:
@@ -232,10 +297,6 @@ def parse_args():
                         help="The action you want the updater to perform out of its known list of actions.",
                         type=str,
                         required=False)
-    parser.add_argument("--file",
-                        help="A text file absolute path argument is expected. If this isn't provided, <exec>/data/links.txt/csv is used.",
-                        type=str,
-                        required=False)
     parser.add_argument("--sep",
                         help="If a separator is used, indicate it. Line ends are included.",
                         type=str,
@@ -255,7 +316,6 @@ def parse_args():
 
 def activity_updater():
     args = parse_args()
-    location = args.file
     separator = args.sep
     info = args.info
     action = args.action
@@ -264,24 +324,13 @@ def activity_updater():
     grades = None # args.grades  -1 -> 16 inclusive range
     chapters = None  # args.ch
 
-    # if the supplied location is invalid, we will use the default
-    if location is None or not os.path.exists(location):
-        def_link_file_name = "links"  # set the default link file name manually
-        location = append_cur_dir("Data", def_link_file_name + ".txt")
-
-        # try to get .csv file
-        if not os.path.exists(location):
-            location = append_cur_dir("Data", def_link_file_name + ".csv")
-            separator = ","
-            if not os.path.exists(location): return
-
     if info is None: info = "LinkbotFace"  # set default model manually
 
     if action is None: action = "update_models"  # set default action manually
 
     # ---------------------- START PROCESSING -------------------------- #
 
-    if grades is None: parse_by_links(action, info, location, separator)
+    if grades is None: parse_by_links(action, info, separator)
     elif grades is not None:
         parse_by_grades(action, info, grades, chapters)
 
