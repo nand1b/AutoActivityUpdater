@@ -30,8 +30,8 @@ def goto_and_click(driver, target_id, by_val=By.XPATH, timeout=global_timeout):
     # ActionChains(driver).scroll_to_element(element).perform()
     ensure_in_view(driver, element)
     WebDriverWait(driver, global_timeout).until(EC.element_to_be_clickable(element))
-    ensure_in_view(driver, element).click()  # double check this would be in view?
-    # wait_for_vis(driver, target_id, by_val, timeout).click()  # apparently we need to relocate it
+    # ensure_in_view(driver, element).click()  # double check this would be in view?
+    wait_for_vis(driver, target_id, by_val, timeout).click()  # apparently we need to relocate it to avoid intercepts
 
 def wait_for_vis(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)

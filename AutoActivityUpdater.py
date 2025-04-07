@@ -132,7 +132,7 @@ def update_models(driver, link, info : list[str]):
     print("Finished: " + link)
 
 # will try to replace x^y in drive expressions with pow(x, y) [never in pre or post board]
-def replace_drive_pow(driver : WebDriver, link, info : list[str]):
+def replace_pow(driver : WebDriver, link, info : list[str]):
     # open the link
     open_and_ignore_prompt(driver, link)
 
@@ -191,18 +191,9 @@ def replace_drive_pow(driver : WebDriver, link, info : list[str]):
 
     print("Finished replacing drive power expressions for: " + link)
 
-# will try to replace x^y in draw expressions with pow(x, y)
-# these may be in the start blocks, preboard, or post board
-def replace_draw_pow(driver, link, info):
-    # open the link
-    driver.get(link)
-
-
 def get_action(action_name : str):
-    if action_name.upper() == "REPLACE_DRIVE_POW":
-        return replace_drive_pow
-    elif action_name.upper() == "REPLACE_DRAW_POW":
-        return replace_draw_pow
+    if action_name.upper() == "REPLACE_POW":
+        return replace_pow
 
     return update_models
 
@@ -333,7 +324,7 @@ def activity_updater():
 
     if info is None: info = "drivexyToExpr(x0"  # manually set info
 
-    if action is None: action = "replace_drive_pow"  # set default action manually
+    if action is None: action = "replace_pow"  # set default action manually
 
     # ---------------------- START PROCESSING -------------------------- #
 
