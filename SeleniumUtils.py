@@ -14,7 +14,7 @@ global_timeout = 10  # sometimes pages need a long time to load or for a connect
 
 def print_element(driver : WebDriver, element : WebElement):
     # print("accessible name: " + element.accessible_name + ", tag: " + element.tag_name + ", text: " + element.text)
-    print(driver.execute_script("return \"Outer: \" + arguments[0].outerHTML", element))
+    print(driver.execute_script("return \"Outer: \\n\" + arguments[0].outerHTML + \"\\n Inner: \\n\" + arguments[0].innerHTML", element))
     print("\n")
 
 # assumes an element has already been confirmed present

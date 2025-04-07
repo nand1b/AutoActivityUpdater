@@ -43,11 +43,11 @@ def get_scrolls(driver):
         ancestor_string = board_descendant_prefix(board_type)
 
     # ensure access to vert scroll
-    vert_scroll = wait_and_get(driver, ancestor_string + "*[name()='g' and @class='blocklyScrollbarVertical']/",
+    vert_scroll = wait_and_get(driver, ancestor_string + "*[name()='g' and @class='blocklyScrollbarVertical']",
                                        By.XPATH)
 
     # ensure access to horizontal scroll
-    hori_scroll = wait_and_get(driver, ancestor_string + "*[name()='g' and @class='blocklyScrollbarHorizontal']/",
+    hori_scroll = wait_and_get(driver, ancestor_string + "*[name()='g' and @class='blocklyScrollbarHorizontal']",
                                        By.XPATH)
 
     return [vert_scroll, hori_scroll]
@@ -63,6 +63,14 @@ def get_scroll_handles(driver, scrolls: list[WebElement] | None = None):
     hori_handle = hori_scroll.find_element(By.XPATH, "./*[name()='rect' and @class='blocklyScrollbarHandle']")
 
     return [vert_handle, hori_handle]
+
+def get_y_trans(element : WebElement):
+    element_transform = element.get_attribute("transform")
+    return float(element_transform[element_transform.find(',') + 1: element_transform.find(')')])
+
+def get_x_trans(element : WebElement):
+    element_transform = element.get_attribute("transform")
+    return float(element_transform[element_transform.find('(') + 1 : element_transform.find(',')])
 
 # controls the navigation of the blockly workspace
 # works off of the link currently open in the driver
@@ -82,8 +90,8 @@ class BlocklyWorkspace:
 
         y_top = vert_scroll.location["y"]
         x_left = hori_scroll.location["x"]
-        y_bot = y_top + vert_scroll.size["height"]
-        x_right = x_left + hori_scroll.size["width"]
+        y_bot = hori_scroll.location["y"] # y_top + vert_scroll.size["height"]
+        x_right = vert_scroll.location["x"] # x_left + hori_scroll.size["width"]
 
         # scroll to edges for both bars
         # negative offset is up for y, left for x
@@ -125,31 +133,45 @@ class BlocklyWorkspace:
         self.characterize_workspace(driver)
 
     def scroll_to(self, driver : WebDriver, element : WebElement):
+        y_shift = 0
+        x_shift = 0
+
+        # go past all non blocklyDraggable parents
         parent = element
         while parent.get_attribute("class") != "blocklyDraggable":
-            print_element(driver, parent)
+            # try to add the translation if present
+            if parent.get_attribute("transform") is not None:
+                y_shift += get_y_trans(parent)
+                x_shift += get_x_trans(parent)
             parent = parent.find_element(By.XPATH, "./..")
 
         # start collecting translation data
-        y_shift = get_y_trans(parent)
-        x_shift = get_x_trans(parent)
+        y_shift += get_y_trans(parent)
+        x_shift += get_x_trans(parent)
 
-        # determine total y shift
+        # determine total shift
+        # collect shifts from all draggable parents (stops at canvas level)
         parent = parent.find_element(By.XPATH, "./..")
         while parent.get_attribute("class") == "blocklyDraggable":
-            y_shift = get_y_trans(parent)
-            x_shift = get_x_trans(parent)
+            y_shift += get_y_trans(parent)
+            x_shift += get_x_trans(parent)
             parent = parent.find_element(By.XPATH, "./..")
 
-        scrolls = get_scroll_handles(driver)
-        vert_handle = scrolls[0]
-        hori_handle = scrolls[1]
+        # the scroll bar elements store information
+        scrolls = get_scrolls(driver)
+        vert_scroll = scrolls[0]
+        hori_scroll = scrolls[1]
+
+        # the handles are used for interaction
+        handles = get_scroll_handles(driver, scrolls)
+        vert_handle = handles[0]
+        hori_handle = handles[1]
 
         ensure_in_view(driver, vert_handle)
         ensure_in_view(driver, hori_handle)
 
-        curr_y_offset : float = float(get_y_trans(vert_handle))
-        curr_x_offset : float = float(get_x_trans(hori_handle))
+        curr_y_offset : float = float(get_y_trans(vert_scroll))
+        curr_x_offset : float = float(get_x_trans(hori_scroll))
 
         y_offset = int(y_shift * self.scroll_per_height - curr_y_offset)
         x_offset = int(x_shift * self.scroll_per_width - curr_x_offset)
@@ -251,11 +273,3 @@ def open_and_ignore_prompt(driver, link):
         print("A prompt was found and ignored")
     except Exception as exception:
         print("No prompt found")
-
-def get_y_trans(element : WebElement):
-    element_transform = element.get_attribute("transform")
-    return float(element_transform[element_transform.find(',') + 1: element_transform.find(')')])
-
-def get_x_trans(element : WebElement):
-    element_transform = element.get_attribute("transform")
-    return float(element_transform[element_transform.find('(') + 1 : element_transform.find(',')])

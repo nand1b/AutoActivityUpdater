@@ -159,11 +159,12 @@ def replace_drive_pow(driver : WebDriver, link, info : list[str]):
             break
 
     # for some reason, this xpath formulation of contains is necessary. Not sure why
-    targeted_carriers = workspace_svg.find_elements(By.XPATH, "//*[text()[contains(., '" + target_expression + "')]]")
-    for curr_carrier in targeted_carriers:
+    targeted_texts = workspace_svg.find_elements(By.XPATH, "./descendant::*[text()[contains(., '" + target_expression + "')]]")
+    for curr_text in targeted_texts:
         #print_element(driver, curr_carrier)
 
-        parent = curr_carrier.find_element(By.XPATH, "./..")
+        # we use contains so that even selected elements are considered
+        parent = curr_text.find_element(By.XPATH, "./..")
         sub_blocks = parent.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyDraggable']")
         expression_block = sub_blocks[len(sub_blocks) - 2]  # last draggable is next draggable, second to last is expr
         text_boxes = expression_block.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyEditableText']")
@@ -179,6 +180,9 @@ def replace_drive_pow(driver : WebDriver, link, info : list[str]):
             ActionChains(driver).move_to_element(text_element).click().perform()  # go to element and select it
             ActionChains(driver).send_keys(Keys.BACKSPACE).perform()  # acts as if a keystroke was pressed
             ActionChains(driver).send_keys_to_element(text_box, updated_text).perform()  # directly sends keys
+
+            # de-select the block
+            ActionChains(driver).move_to_element(parent).move_by_offset(1 + parent.size["width"] / 2, 0).click().perform()
 
     # we need to close the board before we save this link
     if has_board: close_board(driver, link_info.is_pre())
@@ -202,7 +206,7 @@ def get_action(action_name : str):
 
     return update_models
 
-def parse_by_links(action, model, separator):
+def parse_by_links(action, target_info, separator):
     driver = init_bare_driver()  # allows images to load properly so they can be selected
     links = []
     info : list[list[str]] = [[]]
@@ -239,7 +243,7 @@ def parse_by_links(action, model, separator):
     for i in range(0, len(links)):
         link = links[i]
         curr_info = info[i]
-        curr_info.append(model)  # last piece of information is always model
+        curr_info.append(target_info)  # last piece of information is always model
         link_index += 1
         print("On link " + str(link_index) + "/" + str(len(links)) + " with info: " + str(curr_info))
         succeeded = False
@@ -327,7 +331,7 @@ def activity_updater():
     grades = None # args.grades  -1 -> 16 inclusive range
     chapters = None  # args.ch
 
-    if info is None: info = "LinkbotFace"  # set default model manually
+    if info is None: info = "drivexyToExpr(x0"  # manually set info
 
     if action is None: action = "replace_drive_pow"  # set default action manually
 
