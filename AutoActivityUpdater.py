@@ -1,214 +1,198 @@
-import string
 import traceback
 from argparse import ArgumentParser
-from time import sleep
+from math import ceil
 
-from selenium.common import TimeoutException
+from selenium.webdriver import Keys
 
-from SeleniumUtils import *
+from DriverUtils import *
 
-def is_logged_in(driver):
-    try:
-        # locate socket connection status which only appears on login and see if its good
-        connection_status = wait_for_vis(driver, "socketConnectionStatus", by_val=By.ID)
-        if connection_status.get_attribute("class") != "fa fa-circle text-lime":
-            raise ValueError("Connection status not good.")
-    except Exception as error:
-        return False
+# updates the model without closing the robot menu
+def update_model(driver, robot : WebElement, index : int, model):
+    robot_button = robot.find_element(By.TAG_NAME, "button")
+    robot_button.click()
 
-    return True
+    wait_for_vis(driver, "robotModel" + str(index + 1), by_val=By.ID).click()  # open model selection
+    goto_and_click(driver, "//img[@value=\'" + model + "\']", By.XPATH)  # select model
+    wait_for_vis(driver, "closeButton", by_val=By.ID).click()  # close the menu
 
-def ensure_logged_in(driver):
-    print("Waiting for user to login...")
-    while not is_logged_in(driver):
-        sleep(3)
-    print("User login detected.")
+def try_fixup(driver : WebDriver, link, is_lesson, model):
+    robots = get_robots(driver)
+    if robots is None or len(robots) < 1: return
 
-def parse_out_links(location, separator):
-    links: list[str] = []
+    models = []
+    for robot in robots:
+        robot_button = robot.find_element(By.TAG_NAME, "button")
+        robot_model = robot_button.find_element(By.TAG_NAME, "img").get_attribute("src")
+        models.append(robot_model[34 : len(robot_model) - 4])  # exclude .png from model name
 
-    # get all the links as strings
-    with open(location) as source:
-        for line in source:
-            if separator is None:
-                links.append(line.strip())
-                continue
-            prev_sep_end = 0  # index at which we consider characters valid again (inclusive)
-            next_sep = line.find(separator)
-            while next_sep >= 0:
-                links.append(line[prev_sep_end: next_sep])
-                prev_sep_end = next_sep + len(separator)
-                next_sep = line.find(separator, __start=prev_sep_end)
+    error_filename = "PotentialOverwrites.txt"
 
-            # process last link with end line separator
-            if prev_sep_end < len(separator):
-                links.append(line[prev_sep_end: len(separator)])
+    source = get_if_exists(driver, "//button[contains(@id, 'loadExample') and not(contains(@class, 'active'))]", By.XPATH)
+    if source is None:
+        source = get_if_exists(driver, "//button[contains(@id, 'loadSolution') and not(contains(@class, 'active'))]", By.XPATH)
 
-    return links
-
-def update_models(driver, link, model):
-    print("Beginning processing of: " + link)
-    driver.get(link)
-    # ensure_logged_in(driver)  # we can generally assume the user is already logged in
-
-    # see if there is a popup prompt we need to get rid of
-    try:
-        prompt_close = wait_for_vis(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Close\']",
-                              by_val=By.XPATH, timeout=1)
-        prompt_close.click()
-    except Exception as exception:
-        print("No prompt found")
-
-    # user should be logged in now
-    robot_button = wait_for_vis(driver, "robotCollapseButton", by_val=By.ID)
-    ActionChains(driver).scroll_to_element(robot_button)
-    if robot_button.get_attribute("aria-expanded") == "false": robot_button.click()  # expand if not already
-
-    # in case activity does not have robot (which happens surprisingly more than a few times)
-    try:
-        wait_and_get(driver, "//li[@class=\'robotItem relative \']", by_val=By.XPATH, timeout=1)
-    except Exception as error:
-        print("No robots in this activity; skipping")
+    if source is None:
+        print("No source found for fixup; ending fixup attempt.")
+        write_to_file(error_filename, "NO SOURCE: " + link + "\n")
         return
 
-    robots = wait_for_viss(driver, "//li[@class=\'robotItem relative \']", by_val=By.XPATH)
+    ensure_in_view(driver, source)
+    source.click()
+    robots = get_robots(driver)
+    if robots is None or len(robots) < 1: return
+
+    if len(robots) != len(models):
+        print("Model count mismatch between target and source; ending fixup attempt.")
+        write_to_file(error_filename, "MODEL COUNT MISMATCH: " + link + " - " + driver.title + "\n")
+        return
+
+    source_models = []
+    for robot in robots:
+        robot_button = robot.find_element(By.TAG_NAME, "button")
+        robot_model = robot_button.find_element(By.TAG_NAME, "img").get_attribute("src")
+        source_models.append(robot_model[34: len(robot_model) - 4])
+
+    print("Found original models: " + str(models) + " and source models: " + str(source_models))
+
+    has_non_linkbot = False
+    for source_model in source_models:
+        if source_model != "Linkbot" and source_model != "LinkbotFace":
+            has_non_linkbot = True
+            break
+
+    if not has_non_linkbot:
+        print("No fix is needed in fixup attempt.")
+        write_to_file(error_filename, "NO FIX APPLIED: " + link + " - " + driver.title + "\n")
+        return
+
+    print("A fix will be applied in the current fixup attempt.")
+    write_to_file(error_filename, "APPLIED FIX(es): " + link + " - " + driver.title + "\n")
+
+    open_and_ignore_prompt(driver, link)  # go back to original start blocks
+    robots = get_robots(driver)
+    for i in range(0, len(models)):
+        if source_models[i] == "Linkbot": continue  # these models should have been changed
+        if model[i] == source_models[i]: continue  # agreement means this was done correctly
+        update_model(driver, robots[i], i, source_models[i])
+
+    wait_for_vis(driver, "robotCollapseButton", by_val=By.ID).click()  # close menu
+    save_activity(driver, is_lesson)
+
+    return  # we do not need to redo start blocks
+
+def update_models(driver, link, info : list[str]):
+    print("Beginning processing of: " + link)
+    model = info[len(info) - 1]  # last info is always model
+    link_info : LinkInfo = LinkInfo(info[0])
+
+    # open the link
+    open_and_ignore_prompt(driver, link)
+
+    # extract info
+    is_lesson = link_info.is_lesson()  # if this is lesson or activity
+    is_example = link_info.is_example()  # if this is example or solution/start blocks
+    target_num = link_info.get_num_str()  # if this is start blocks (None) or what number to target
+
+    print("Trying fixup")
+
+    # try to fix start blocks, since we have iterated over all of them already
+    try_fixup(driver, link, is_lesson, model)  # try to fix all the start blocks
+
+    print("Finished trying fixup")
+    print("Beginning with is_example: " + str(is_example) + ", target_num: " + str(target_num))
+
+    open_and_ignore_prompt(driver, link)  # we need to reset page after fixup attempt
+
+    select_target_type(driver, is_example, target_num)  # opens example or solution of correct num if relevant
+
+    robots = get_robots(driver)
+    if robots is None: return
 
     # set the models
     for index in range(0, len(robots)):
-        print("Beginning on robot " + str(index + 1))
+        print("Beginning on robot " + str(index + 1) + "/" + str(len(robots)))
         robot = robots[index]  # they should be in order
-        robot.find_element(By.TAG_NAME, "button").click()  # select robot
 
-        # attempt to bypass opening model menu and associated issues of clickable image not loading
-        # image = robot.find_element(by=By.CSS_SELECTOR, value="img")
-        # model_path = "/img/models/" + model + ".png"
-        # driver.execute_script("arguments[0].setAttribute(\"src\", \"" + model_path + "\")", image)
+        robot_model = robot.find_element(By.TAG_NAME, "button").find_element(By.TAG_NAME, "img").get_attribute("src")
+        if robot_model[34 : len(robot_model) - 4] != "Linkbot": continue  # don't update non linkbot models
 
-        wait_for_vis(driver, "robotModel" + str(index + 1), by_val=By.ID).click()  # open model selection
-        image = wait_for_vis(driver, "//img[@value=\'" + model + "\']", 10, by_val=By.XPATH).click()  # select model
-        wait_for_vis(driver, "closeButton", by_val=By.ID).click()  # close the menu
+        update_model(driver, robot, index, model)
         print("Finished robot " + str(index + 1))
 
         # last line of robot processing
+
+    # close the robot menu
     print("Finished processing all robots; preparing to save.")
-    robot_button.click()  # close the robot menu
-    wait_for_vis(driver, "saveTab", by_val=By.ID).click()  # open the save menu
+    wait_for_vis(driver, "robotCollapseButton", by_val=By.ID).click()  # perform close
 
-    try:
-        # we try to quickly cause a throw if this is not a lesson
-        wait_and_get(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
-                    by_val=By.XPATH, timeout=1)
-        print("This is a lesson")
-        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
-                    by_val=By.XPATH, timeout=5)
-
-    except Exception as error:
-        print("This is an activity")
-        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Activity\']",
-                       by_val=By.XPATH)  # ideally shouldn't take very long for this to popup
-
-
-    print("Clicked on Update")
-
-    # get all the buttons because of issues with xpath locating elements via text
-    goto_and_click(driver,"//div[@class=\'jconfirm-buttons\']/button[text()=\'Submit\']",
-                            by_val=By.XPATH)
-
-    print("Finished submitting")
-
-    # ensure all close buttons are loaded
-    wait_for_viss(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Close\']",
-                            by_val=By.XPATH)  # close the confirmation prompt
+    # save changes
+    save_activity(driver, is_lesson)
 
     # we don't bother manually closing since its far more consistent to just navigate to the next page
     print("Finished: " + link)
 
-# gets first and last index of operand characters
-def get_operand_bounds(expression, op_index, is_after):
-    # skip over whitespaces before power operator
-    operand_end = op_index  # will end on first non-whitespace character
-
-    # determine if we are going up or down (past or before) in expression relative to op
-    shift_dir = 0
-    paren_plus = None
-    paren_minus = None
-    if is_after:
-        # if we want following operand, it has the form: OP ( ... ), or: OP xxxx
-        shift_dir = 1
-        paren_plus = '('
-        paren_minus = ')'
-    else:
-        # if we want preceding operand, it has form: ( ... ) OP, or: xxxx OP
-        shift_dir = -1
-        paren_plus = ')'
-        paren_minus = '('
-
-    operand_end += shift_dir
-
-    # find the first non whitespace index
-    while string.whitespace.__contains__(expression[operand_end]):
-        operand_end += shift_dir
-
-    # find the start of the expression
-    operand_begin = 0
-    if expression[operand_end] == paren_plus:
-        curr_index = operand_end
-        paren_count = 1  # becomes zero when full parenthesis expression has been closed
-        # get to the end of the parenthesis statement
-        while paren_count > 0:
-            curr_index += shift_dir  # go in shift direction by one character
-            curr_char = expression[curr_index]
-            if curr_char == paren_plus: paren_count += 1
-            if curr_char == paren_minus: paren_count -= 1
-
-        operand_begin = curr_index
-    else:
-        # find the first space before expression
-        if is_after:
-            operand_begin = expression.find(' ', __start=op_index + 1) + 1
-        else:
-            operand_begin = expression.rfind(' ', __end=operand_end) + 1
-
-    return [operand_begin, operand_end]
-
-# converts x^y to pow(x, y)
-def update_pow_expr(expression : str):
-    # update the format to match what is desired
-    pow_index = expression.find('^')
-    base_bounds : list[int] = get_operand_bounds(expression, pow_index, False)
-    power_bounds = get_operand_bounds(expression, pow_index, True)
-
-    base = expression[base_bounds[0] : base_bounds[1] + 1]
-    power = expression[power_bounds[0] : power_bounds[1] + 1]
-    operation = "pow(" + base + ", " + power + ")"
-
-    # strip out the power,
-    return expression[0 : base[0]] + operation + expression[power_bounds[1] + 1 : len(expression)]
-
-def update_pow_expressions(expression : str):
-    # continue to perform replacement on all power expressions until they are replaced
-    pow_index = expression.find('^')
-    while pow_index > -1:
-        expression = update_pow_expr(expression)
-        pow_index = expression.find('^')
-
 # will try to replace x^y in drive expressions with pow(x, y) [never in pre or post board]
-def replace_drive_pow(driver, link, info):
+def replace_drive_pow(driver : WebDriver, link, info : list[str]):
     # open the link
-    driver.get(link)
+    open_and_ignore_prompt(driver, link)
 
-    # locate each drive in order
-        # locate occurrences of x^y
-        # update occurrences to desired form
+    target_expression : str = info[len(info) - 1]
+
+    link_info : LinkInfo = LinkInfo(info[0])
+    is_lesson = link_info.is_lesson()
+    is_example = link_info.is_example()
+    target_num = link_info.get_num_str()
+    has_board = link_info.is_pre() or link_info.is_post()  # neither board should be on for start blocks
+
+    select_target_type(driver, is_example, target_num)
+    svg_lineage = "//"
+    if has_board:
+        open_board(driver, link_info.is_pre())
+        svg_lineage = board_descendant_prefix(get_board_id(link_info.is_pre()))
+
+    # apparently svg elements must be captured directly, not as children of other elements ?
+    svgs = wait_and_gets(driver, svg_lineage + "*[name()='svg' and @class='blocklySvg']", By.XPATH)
+    workspace_svg = None
+    for svg in svgs:
+        if svg.find_element(By.XPATH, "./..").get_attribute("id") == "content_blocks":
+            workspace_svg = svg
+            break
+
+    # for some reason, this xpath formulation of contains is necessary. Not sure why
+    targeted_carriers = workspace_svg.find_elements(By.XPATH, "//*[text()[contains(., '" + target_expression + "')]]")
+    for curr_carrier in targeted_carriers:
+        #print_element(driver, curr_carrier)
+
+        parent = curr_carrier.find_element(By.XPATH, "./..")
+        sub_blocks = parent.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyDraggable']")
+        expression_block = sub_blocks[len(sub_blocks) - 2]  # last draggable is next draggable, second to last is expr
+        text_boxes = expression_block.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyEditableText']")
+
+        for text_box in text_boxes:
+            text_element = text_box.find_element(By.XPATH, "./child::*[name()='text' and @class='blocklyText']")
+
+            workspace : BlocklyWorkspace = BlocklyWorkspace(driver)
+            workspace.scroll_to(driver, text_element)
+
+            # update the expression
+            updated_text = update_pow_expressions(text_element.text)
+            ActionChains(driver).move_to_element(text_element).click().perform()  # go to element and select it
+            ActionChains(driver).send_keys(Keys.BACKSPACE).perform()  # acts as if a keystroke was pressed
+            ActionChains(driver).send_keys_to_element(text_box, updated_text).perform()  # directly sends keys
+
+    # we need to close the board before we save this link
+    if has_board: close_board(driver, link_info.is_pre())
+
+    save_activity(driver, is_lesson)
+
+    print("Finished replacing drive power expressions for: " + link)
 
 # will try to replace x^y in draw expressions with pow(x, y)
+# these may be in the start blocks, preboard, or post board
 def replace_draw_pow(driver, link, info):
     # open the link
     driver.get(link)
 
-    # iterate through solution, pre, and post board
-        # iterate through all draw lines based on expression blocks
-            # Update the expression
 
 def get_action(action_name : str):
     if action_name.upper() == "REPLACE_DRIVE_POW":
@@ -218,42 +202,54 @@ def get_action(action_name : str):
 
     return update_models
 
-def get_action_link(action_name: str):
-    return ""
-
-def parse_by_links(action, info, separator):
+def parse_by_links(action, model, separator):
     driver = init_bare_driver()  # allows images to load properly so they can be selected
     links = []
+    info : list[list[str]] = [[]]
 
     # get links from provided link page
     driver.get("https://roboblocky.com/activity-portal/script_linkbotSymbol.php")
     ensure_logged_in(driver)
 
-    link_elements = wait_and_gets(driver, "//a[@target=\'_blank\']", by_val=By.XPATH)
+    print("Gathering links...")
+    link_elements = wait_and_gets(driver, "//div[@class='row']//a[@target=\'_blank\']", by_val=By.XPATH)
     for element in link_elements:
         links.append(element.get_attribute("href"))
+        info.append([element.text])  # we will parse this later
+
+    print("Finished gathering links, pruning now.")
 
     # used to avoid re-doing previously computed work
     #3244 doesn't have any robots
-    start_from_link = "https://roboblocky.com/u/10626.php"
+    start_from_link = "https://roboblocky.com/u/12901.php" # "https://roboblocky.com/u/780.php" first "fixed up" link
     if start_from_link is not None:
         for i in range(0, len(links)):
             if links[i] == start_from_link:
                 links = links[i : len(links)]
+                info = info[i : len(info)]
                 break
 
-    print("All links collected, printing first 20: \n", links[0:20])
+    # the list automatically shrinks when its been detected as completed?
+    print("Finished pruning, beginning looping.")
+
+    links = ["https://roboblocky.com/u/5932.php"]
+    action = get_action(action)
+    #print("All links collected, printing first 20: \n", links[0:20])
     link_index = 0
-    for link in links:
+    for i in range(0, len(links)):
+        link = links[i]
+        curr_info = info[i]
+        curr_info.append(model)  # last piece of information is always model
         link_index += 1
-        print("On link " + str(link_index) + "/" + str(len(links)))
+        print("On link " + str(link_index) + "/" + str(len(links)) + " with info: " + str(curr_info))
         succeeded = False
         while not succeeded:
             try:
-                update_models(driver, link, info)
+                action(driver, link, curr_info)
                 succeeded = True
             except Exception as error:
-                print("Got error on link: " + link + "<" + str(link_index) + "/" + str(len(links)) + "> of: \n", error)
+                print("Got error on link: " + link + "<" + str(link_index) + "/" + str(len(links)) + ">  of: \n", error,
+                      "\n and traceback: \n", traceback.format_exc())
                 print("Trying to run on this link again")
                 #update_models(driver, link, info)  # try again
                 #print("Navigate to a new webpage to continue process")
@@ -262,13 +258,18 @@ def parse_by_links(action, info, separator):
             # last line of link processing
 
     print("Finished processing all links")
+    driver.quit()
 
 def go_to_curriculum(driver, grade_index):
     row = wait_and_gets(driver, "tr", By.TAG_NAME)[int(grade_index / 4)]
     grade = row.find_elements(By.TAG_NAME, "a")[grade_index % 4]
     ActionChains(driver).scroll_to_element(grade).click()
 
-def parse_by_grades(action, info, grades, chapters : list[int] | None):
+def parse_by_grades(action, info, grades : list[int] | None, chapters : list[int] | None):
+    if grades is None:
+        print("No grades supplied; returning.")
+        return
+
     driver = init_bare_driver()
     curriculum = "https://roboblocky.com/curriculum/"
 
@@ -290,6 +291,8 @@ def parse_by_grades(action, info, grades, chapters : list[int] | None):
 
             # reset page
             go_to_curriculum(driver, grade + 1)
+
+    driver.quit()
 
 def parse_args():
     parser = ArgumentParser("AutomaticActivityUpdater")
@@ -326,7 +329,7 @@ def activity_updater():
 
     if info is None: info = "LinkbotFace"  # set default model manually
 
-    if action is None: action = "update_models"  # set default action manually
+    if action is None: action = "replace_drive_pow"  # set default action manually
 
     # ---------------------- START PROCESSING -------------------------- #
 

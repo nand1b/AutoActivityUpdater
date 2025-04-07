@@ -1,43 +1,62 @@
 import selenium
-import os
 import selenium.webdriver
 
-from selenium.webdriver import ActionChains
+from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+from Utils import *
+
 global_timeout = 10  # sometimes pages need a long time to load or for a connection to re-stabilize
+
+def print_element(driver : WebDriver, element : WebElement):
+    # print("accessible name: " + element.accessible_name + ", tag: " + element.tag_name + ", text: " + element.text)
+    print(driver.execute_script("return \"Outer: \" + arguments[0].outerHTML", element))
+    print("\n")
 
 # assumes an element has already been confirmed present
 def ensure_in_view(driver, element : WebElement, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
-    ActionChains(driver).scroll_to_element(element)
+    driver.execute_script("arguments[0].scrollIntoView(true)", element)
+    # ActionChains(driver).scroll_to_element(element)
     ret = wait.until(EC.visibility_of(element))
     return ret
 
 def goto_and_click(driver, target_id, by_val=By.XPATH, timeout=global_timeout):
-    element = wait_for_vis(driver, target_id, timeout, by_val)
-    ActionChains(driver).scroll_to_element(element)
+    element = wait_and_get(driver, target_id, by_val, timeout)
+    # ActionChains(driver).scroll_to_element(element).perform()
+    ensure_in_view(driver, element)
     WebDriverWait(driver, global_timeout).until(EC.element_to_be_clickable(element))
-    wait_for_vis(driver, target_id, timeout, by_val).click()  # apparently we need to relocate it
+    ensure_in_view(driver, element).click()  # double check this would be in view?
+    # wait_for_vis(driver, target_id, by_val, timeout).click()  # apparently we need to relocate it
 
-def wait_for_vis(driver, target_id, timeout=global_timeout, by_val=By.CSS_SELECTOR):
+def wait_for_vis(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
     ret = wait.until(EC.visibility_of_element_located((by_val, target_id)))
     return ret
 
-def wait_and_get(driver, target_id, timeout=global_timeout, by_val=By.ID):
+# will just immediately try to get an element if it exists
+def get_if_exists(driver : WebDriver, target_id, by_val=By.XPATH):
+    result = None
+    try:
+        result = driver.find_element(by_val, target_id)
+    except Exception as error:
+        pass
+
+    return result
+
+def wait_and_get(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
     return wait.until(EC.presence_of_element_located( (by_val, target_id) ))
 
-def wait_and_gets(driver, target_id, timeout=global_timeout, by_val=By.ID):
+def wait_and_gets(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
     return wait.until(EC.presence_of_all_elements_located((by_val, target_id)))
 
-def wait_for_viss(driver, target_id, timeout=global_timeout, by_val=By.ID):
+def wait_for_viss(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
     return wait.until(EC.visibility_of_all_elements_located( (by_val, target_id) ))
 
@@ -64,12 +83,6 @@ def is_downloading(driver):
             return True
 
     return False
-
-def get_curr_dir():
-    return os.path.dirname(os.path.realpath(__file__))
-
-def append_cur_dir(*suffix : str):
-    return os.path.join(os.path.dirname(os.path.realpath(__file__)), *suffix)
 
 # spread out for debugging purposes; assumes driver is on chrome downloads url already
 def get_top_download(driver):
