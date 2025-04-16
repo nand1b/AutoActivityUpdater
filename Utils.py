@@ -1,11 +1,125 @@
 import string
 import os
+from lxml import etree
+from copy import deepcopy
+
+
+def prettyprint(element, **kwargs):
+    xml = etree.tostring(element, pretty_print=True, **kwargs)
+    print(xml.decode(), end='')
+
+
+def insert_text_element(container, name, text):
+    # create and set values
+    text_element = etree.SubElement(container, "value", {"name" : name})
+    element_type = etree.SubElement(text_element, "block", {"type" : "text"})
+    etree.SubElement(element_type, "field", {"name" : "TEXT"}).text = text
+
+    return text_element
+
+
+def update_expression_container(container : etree.Element) -> bool:
+    # text combination handling more complicated
+    num_slots = int(container[0].attrib["items"])  # the slots available
+    filled_slots = 0
+    variables: dict[int, etree.Element] = {}  # the slots actually filled
+    result_text = ""  # the result of combining all variables and text
+    print("\nContainer start: \n")
+    prettyprint(container)
+
+    # elements in expression addition are 0 indexed
+    for i in range(0, num_slots):
+        potential_elements = container.xpath("./*[local-name()='value' and @name='ADD" + str(i) + "']")
+        if potential_elements is None or len(potential_elements) == 0: continue
+        curr_element = potential_elements[0]
+
+        filled_slots += 1
+
+        # if this isn't text, we will just treat it as a variable to re-insert after
+        if curr_element[0] is None or curr_element[0].attrib["type"] != "text":
+            variables[i] = deepcopy(curr_element)
+            result_text += "ARG{" + str(i) + "}"  # we index based on the index assigned in xml
+            continue
+
+        # add the text from this element
+        result_text += curr_element[0][0].text
+
+    print("Inspecting " + result_text + "\n")
+    if result_text.find("^") == -1 and result_text.find("pow") == -1: return False # no power to update
+    prev_text = result_text
+    result_text = update_pow_expressions(result_text)
+    if prev_text == result_text: return False  # no fixup needed
+
+    # locate all arguments in the updated expression
+    variable_infos: list[list[int]] = []  # store the arg index and start and end char indices
+    arg_pos = result_text.find("ARG")
+    while arg_pos != -1:
+        arg_num_start = result_text.find("{", arg_pos + 3)
+        arg_num_end = result_text.find("}", arg_pos + 3)
+        variable_infos.append([int(result_text[arg_num_start + 1: arg_num_end]), arg_pos, arg_num_end])
+        arg_pos = result_text.find("ARG", arg_num_end + 1)
+
+    # split the result text
+    text_elements: list[str] = []
+    text_start = 0
+    for variable_info in variable_infos:
+        if text_start >= variable_info[1] - 1:
+            # these are two back to back variables or a variable at the start
+            text_start = variable_info[2] + 1
+            continue
+        text_elements.append(result_text[text_start: variable_info[1]])
+        text_start = variable_info[2] + 1  # after argument portion is over, text begins again
+
+    # we need to grab the very last text
+    if text_start < len(result_text):
+        text_elements.append(result_text[text_start : len(result_text)])
+
+    # purge all elements other than the mutation
+    for i in range(1, filled_slots + 1):
+        # as we remove elements, subsequent ones have their index lowered
+        container.remove(container[1])
+
+    # set the exact number of elements needed
+    filled_slots = len(text_elements) + len(variable_infos)
+    container[0].set("items", str(filled_slots))
+
+    # insert all elements in order
+    element_count: int = 0
+    var_count : int = 0
+
+    # if we start with a variable instead of text, insert it first
+    if len(variable_infos) > 0 and variable_infos[0][1] == 0:
+        var = variables[variable_infos[var_count][0]]
+        var.set("name", "ADD" + str(element_count))
+        container.append(var)
+        var_count += 1
+        element_count += 1
+
+    for text_element in text_elements:
+        # first insert the text, then the variable that proceeds it
+        insert_text_element(container, "ADD" + str(element_count), text_element)
+
+        if element_count == filled_slots - 1: continue  # if we are one less than full, this was last element
+
+        # put the next element, since they are stored in L->R order in variable_infos
+        var = variables[variable_infos[var_count][0]]
+        var.set("name", "ADD" + str(element_count + 1))
+        container.append(var)
+
+        element_count += 2
+        var_count += 1
+
+    print("\nContainer end: \n")
+    prettyprint(container)
+    print("\nUpdated to " + result_text + "\n")
+    return True
 
 # the current directory of this file
 def get_curr_dir():
     return os.path.dirname(os.path.realpath(__file__))
 
 # some path originating from the current directory of this file
+# only ended with a separator if the last argument is empty or ends with one already
 def append_cur_dir(*suffix : str):
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), *suffix)
 
@@ -24,17 +138,24 @@ class LinkInfo:
             "N": 0  # indicates no number provided
         }
 
+        prev_token : str = ""
         for token in descriptor.split():
-            if token == "Lesson":
+            if len(token) < 1: continue  # ignore empty tokens
+            if token.find("Lesson") != -1:
                 self.curr_info['L'] = 1  # either a lesson or activity
-            elif token == "Pre-Board":
+            elif token.find("Pre-Board") != -1:
                 self.curr_info['Pr'] = 1
-            elif token == "Post-Board":
+            elif token.find("Post-Board") != -1:
                 self.curr_info['Po'] = 1
-            elif token == "Example":
+            elif token.find("Example") != -1:
                 self.curr_info['E'] = 1
-            elif token[len(token) - 1].isdigit() and (len(token) == 1 or token[0] == '#'):
-                self.curr_info['N'] = int(token[len(token) - 1])
+            # checks if token is preceded by Example or Solution, e.g. Example 2, or Solution #4
+            elif prev_token.find("Example") != -1 or prev_token.find("Solution") != -1:
+                # ensures numerical token is of form #xxxx... or 1, 2, 3, etc (assumes we never get numbers past 9
+                if (token[0] == '#' and len(token) > 1 and token[1].isdigit()) or (token[0].isdigit() and len(token) == 1):
+                    self.curr_info['N'] = int(token[len(token) - 1])
+
+            prev_token = token
 
     def __str__(self):
         result : str = ""
@@ -72,7 +193,10 @@ def is_operand(char):
     operands = ['+', '-', '*', '/']
     return operands.__contains__(char)
 
-# gets first (inclusive) and last (exclusive) index of operand characters
+def is_numerical(char):
+    return '0' <= char <= '9' or char == '.'
+
+# gets first (inclusive) and last (inclusive) index of operand characters
 def get_operand_bounds(expression : str, op_index : int, is_after):
     # skip over whitespaces before power operator
     closer_bound : int = op_index  # will end on first non-whitespace character
@@ -98,10 +222,11 @@ def get_operand_bounds(expression : str, op_index : int, is_after):
     while is_whitespace(expression[closer_bound]):
         closer_bound += shift_dir
 
-    # find the start of the expression
+    # find the further end point of the expression
     further_bound : int = closer_bound
+    has_paren : int = 0  # effectively a bool
     if expression[closer_bound] == paren_plus:
-        further_bound = closer_bound
+        has_paren = 1
         paren_count = 1  # becomes zero when full parenthesis expression has been closed
         # get to the end of the parenthesis statement
         while paren_count > 0:
@@ -109,50 +234,120 @@ def get_operand_bounds(expression : str, op_index : int, is_after):
             curr_char = expression[further_bound]
             if curr_char == paren_plus: paren_count += 1
             if curr_char == paren_minus: paren_count -= 1
-
-        if is_after: operand_end = further_bound
-        else: further_bound = further_bound
     else:
         # find the end of the expression furthest from the operand
-        if is_after:
-            while further_bound < len(expression):
-                further_bound += 1
-                curr_char = expression[further_bound]
-                if is_whitespace(curr_char) or is_operand(curr_char): break
-        else:
-            while further_bound >= 0:
-                further_bound -= 1
-                curr_char = expression[further_bound]
-                if is_whitespace(curr_char) or is_operand(curr_char): break
+        # these bounds ensure we won't do any shifting if we are already at edge
+        while 0 < further_bound < len(expression) - 1:
+            further_bound += shift_dir
+            curr_char = expression[further_bound]
+            if not is_numerical(curr_char):
+                further_bound -= shift_dir  # go back to last valid character
+                break
 
     if is_after:
-        return [closer_bound, further_bound]
+        return [closer_bound, further_bound, has_paren]
     else:
         # further bound is one too far left to be inclusive and closer is one too far left to be exclusive
-        return [further_bound + 1, closer_bound + 1]
+        return [further_bound, closer_bound, has_paren]
 
 # converts x^y to pow(x, y)
-def update_pow_expr(expression : str):
+def update_pow_expr(expression : str, pow_index):
     # update the format to match what is desired
-    pow_index = expression.find('^')
     base_bounds : list[int] = get_operand_bounds(expression, pow_index, False)
     power_bounds : list[int] = get_operand_bounds(expression, pow_index, True)
 
-    base : str = expression[base_bounds[0] : base_bounds[1]]
-    power : str = expression[power_bounds[0] : power_bounds[1]]
-    operation = "pow(" + base + ", " + power + ")"
+    # if a parenthesis was used we can discard it
+    # to do this we have it included in the replacement, but excluded from the expression
+    base_lower = base_bounds[0] + base_bounds[2]
+    base_upper = base_bounds[1] - base_bounds[2]
+
+    pow_lower = power_bounds[0] + power_bounds[2]
+    pow_upper = power_bounds[1] - power_bounds[2]
+
+    base : str = expression[base_lower : base_upper + 1]
+    power : str = expression[pow_lower : pow_upper + 1]
+
+    operation = "pow(" + base + "," + power + ")"
 
     # strip out the power,
-    return expression[0 : base_bounds[0]] + operation + expression[power_bounds[1] : len(expression)]
+    return expression[0 : base_bounds[0]] + operation + expression[power_bounds[1] + 1 : len(expression)]
 
-def update_pow_expressions(expression : str):
+def update_pow_expressions(expression : str) -> str:
     # continue to perform replacement on all power expressions until they are replaced
+    expression = inspect_pow_expressions(expression)
+
     pow_index = expression.find('^')
     while pow_index > -1:
-        expression = update_pow_expr(expression)
+        expression = update_pow_expr(expression, pow_index)
         pow_index = expression.find('^')
 
     return expression
+
+
+def inspect_pow_expressions(expression : str) -> str:
+    pow_index = expression.find("pow")
+    while pow_index > -1:
+        expression = inspect_pow_expr(expression, pow_index)
+        pow_index = expression.find("pow", pow_index + 4)
+
+    return expression
+
+
+def inspect_pow_expr(expression : str, pow_index : int) -> str:
+    arg_start = pow_index + 4
+    paren_count = 1
+    arg_end = arg_start
+    for i in range(arg_start, len(expression)):
+        curr_char : str = expression[i]
+        if curr_char == '(': paren_count += 1
+        elif curr_char == ')': paren_count -= 1
+
+        if paren_count == 0:
+            arg_end = i - 1
+            break
+
+    arg1_start = arg_start
+    arg1_end = expression.find(",", arg_start) - 1
+    arg2_start = arg1_end + 2
+    arg2_end = arg_end
+
+    arg1_paren_count = 0
+    for i in range(arg1_start, arg2_start):
+        curr_char : str = expression[i]
+        if curr_char == '(': arg1_paren_count += 1
+        elif curr_char == ')': arg1_paren_count -= 1
+
+    arg2_paren_count = 0
+    for i in range(arg2_start, arg2_end + 1):
+        curr_char: str = expression[i]
+        if curr_char == '(': arg2_paren_count += 1
+        elif curr_char == ')': arg2_paren_count -= 1
+
+    if arg1_paren_count + arg2_paren_count != 0:
+        raise RuntimeError("Malformed power expression")
+
+    # get the actual start of the first argument
+    arg1_start_actual = arg1_start
+    stripped_paren_count = 0
+    for i in range(arg1_start, arg1_end + 1):
+        if stripped_paren_count >= arg1_paren_count: break  # stop when we removed all extra paren
+        curr_char : str = expression[i]
+        if curr_char == '(': stripped_paren_count += 1
+        arg1_start_actual += 1
+
+    arg2_end_actual = arg2_end
+    stripped_paren_count = 0
+    for i in range(arg2_end, arg2_start - 1, -1):
+        if stripped_paren_count >= arg1_paren_count: break
+        curr_char : str = expression[i]
+        if curr_char == ')': stripped_paren_count += 1
+        arg2_end_actual -= 1
+
+    # strip the parenthesis
+    args_actual : str = expression[arg1_start_actual: arg2_end_actual + 1]
+    args_actual.strip()  # remove whitespace on edges
+
+    return expression[0 : arg_start] + args_actual + expression[arg_end + 1 : len(expression)]
 
 def parse_out_links(location, separator):
     links: list[str] = []

@@ -1,5 +1,6 @@
 import selenium
 import selenium.webdriver
+from selenium.common import ElementClickInterceptedException, TimeoutException
 
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
@@ -10,7 +11,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from Utils import *
 
-global_timeout = 10  # sometimes pages need a long time to load or for a connection to re-stabilize
+global_timeout = 5  # sometimes pages need a long time to load or for a connection to re-stabilize
 
 def print_element(driver : WebDriver, element : WebElement):
     # print("accessible name: " + element.accessible_name + ", tag: " + element.tag_name + ", text: " + element.text)
@@ -25,13 +26,18 @@ def ensure_in_view(driver, element : WebElement, timeout=global_timeout):
     ret = wait.until(EC.visibility_of(element))
     return ret
 
-def goto_and_click(driver, target_id, by_val=By.XPATH, timeout=global_timeout):
-    element = wait_and_get(driver, target_id, by_val, timeout)
-    # ActionChains(driver).scroll_to_element(element).perform()
-    ensure_in_view(driver, element)
-    WebDriverWait(driver, global_timeout).until(EC.element_to_be_clickable(element))
-    # ensure_in_view(driver, element).click()  # double check this would be in view?
-    wait_for_vis(driver, target_id, by_val, timeout).click()  # apparently we need to relocate it to avoid intercepts
+def goto_and_click(driver : WebDriver, target_id, by_val=By.XPATH, timeout=global_timeout):
+    intercepted = True
+    while intercepted:
+        try:
+            element = wait_and_get(driver, target_id, by_val, timeout)
+            ensure_in_view(driver, element)
+            driver.implicitly_wait(0.25)  # wait for the element to become clickable
+            WebDriverWait(driver, global_timeout).until(EC.element_to_be_clickable(element)).click()
+            intercepted = False  # clearly the click succeeded, so we don't need to continue looping
+        except ElementClickInterceptedException as intercepted_click:
+            pass  # forcing JS to click for us does not actually work
+
 
 def wait_for_vis(driver, target_id, by_val=By.CSS_SELECTOR, timeout=global_timeout):
     wait = WebDriverWait(driver, timeout)
@@ -84,8 +90,9 @@ def is_downloading(driver):
 
     return False
 
-# spread out for debugging purposes; assumes driver is on chrome downloads url already
-def get_top_download(driver):
+# spread out for debugging purposes; will go to downloads
+def get_top_download(driver : WebDriver):
+    driver.get("chrome://downloads/")
     curr_down : WebElement = wait_and_get(driver, "//downloads-manager", by_val=By.XPATH)
     curr_down = curr_down.shadow_root.find_element(value="downloadsList") # does find shadow root
     curr_down = curr_down.find_element(value="list")
@@ -96,7 +103,10 @@ def init_bare_driver():
     options = selenium.webdriver.ChromeOptions()
     options.add_argument("--no-sandbox")  # apparently this is very insecure, but it should be okay
     options.add_argument("disable-infobars")
+    options.add_argument("disable-features=DownloadBubble,DownloadBubbleV2")
     options.add_argument(r"user-data-dir=" + str(append_cur_dir("cookies", "testing0")))
+    prefs = {"download.default_directory": append_cur_dir("Downloads"), "download.prompt_for_download" : False}
+    options.add_experimental_option("prefs", prefs)
     return selenium.webdriver.Chrome(options=options)  # program may get stuck here if it can't get enough resources
 
 def initialize_driver(down_dir=append_cur_dir("Downloads")):

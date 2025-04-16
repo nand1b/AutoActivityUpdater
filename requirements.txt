@@ -1,1 +1,2 @@
-selenium
+selenium~=4.30.0
+lxml~=5.3.2

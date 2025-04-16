@@ -19,6 +19,7 @@ def determine_board_type(driver : WebDriver):
 def open_board(driver : WebDriver, is_preboard : bool):
     board_name = get_board_id(is_preboard)
     goto_and_click(driver, "editBoard", By.ID)
+    sleep(0.5)  # let the window actually pop up
     goto_and_click(driver, board_name, By.NAME)
 
 def close_board(driver : WebDriver, is_preboard : bool):
@@ -197,28 +198,37 @@ def ensure_logged_in(driver):
         sleep(1)
     print("User login detected.")
 
+# downloads activity by opening save tab and then hitting save
+def download_activity(driver : WebDriver, board_index : int):
+    save_id : str = "saveTab"
+    if board_index > 1: save_id += str(board_index)
+    goto_and_click(driver, save_id, By.ID)
+    goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Save\']", By.XPATH)
+
 # performs the actions necessary to save, but does not clean up save menu (leaves it open)
-def save_activity(driver, is_lesson=None):
-    wait_for_vis(driver, "saveTab", by_val=By.ID).click()  # open the save menu
+def save_activity(driver, is_lesson=None, board_index : int=1):
+    save_tab_id : str = "saveTab"
+    if board_index != 1: save_tab_id += str(board_index)
+    goto_and_click(driver, save_tab_id, by_val=By.ID)  # open the save menu
 
     if is_lesson is None:
         try:
             # we try to quickly cause a throw if this is not a lesson
-            wait_and_get(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
+            wait_and_get(driver, "//div[@class=\'jconfirm-buttons\']/button[contains(text(), \'Update Lesson\')]",
                          by_val=By.XPATH, timeout=1)
             print("This is a lesson")
-            goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
+            goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[contains(text(), \'Update Lesson\')]",
                            by_val=By.XPATH, timeout=5)
 
         except Exception as error:
             print("This is an activity")
-            goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Activity\']",
+            goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[contains(text(), \'Update Activity\')]",
                            by_val=By.XPATH)  # ideally shouldn't take very long for this to popup
     elif is_lesson:
-        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Lesson\']",
+        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[contains(text(), \'Update Lesson\')]",
                        by_val=By.XPATH, timeout=5)
     else:
-        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[text()=\'Update Activity\']",
+        goto_and_click(driver, "//div[@class=\'jconfirm-buttons\']/button[contains(text(), \'Update Activity\')]",
                        by_val=By.XPATH)  # ideally shouldn't take very long for this to popup
 
     print("Clicked on Update")

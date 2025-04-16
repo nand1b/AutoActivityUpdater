@@ -1,10 +1,11 @@
 import traceback
 from argparse import ArgumentParser
-from math import ceil
 
 from selenium.webdriver import Keys
 
 from DriverUtils import *
+
+import pyautogui
 
 # updates the model without closing the robot menu
 def update_model(driver, robot : WebElement, index : int, model):
@@ -131,8 +132,143 @@ def update_models(driver, link, info : list[str]):
     # we don't bother manually closing since its far more consistent to just navigate to the next page
     print("Finished: " + link)
 
+def is_draw_replace(expression : str) -> bool:
+    return expression == "draw_expr"
+
+def replace_pow_xml(driver : WebDriver, link , info : list[str]):
+    # open the link
+    open_and_ignore_prompt(driver, link)
+
+    target_expression: str = info[len(info) - 1]
+    is_draw : bool = is_draw_replace(target_expression)
+    target_name = "expr"
+    if is_draw: target_name = "VALUE_4"
+
+    link_info: LinkInfo = LinkInfo(info[0])
+    is_lesson = link_info.is_lesson()
+    is_example = link_info.is_example()
+    target_num = link_info.get_num_str()
+    has_board = link_info.is_pre() or link_info.is_post()  # neither board should be on for start blocks
+
+    select_target_type(driver, is_example, target_num)  # open example or solution
+
+    # will open the correct board, or none of that is appropriate
+    board_type = None
+    board_index : int = 1
+    if has_board:
+        if link_info.is_pre():
+            board_type = "PreBoard"
+            board_index = 2
+        else:
+            board_type = "PostBoard"
+            board_index = 3
+        open_board(driver, link_info.is_pre())
+
+    title = driver.title
+
+    # download the activity and get details about the downloaded file
+    download_activity(driver, board_index)
+    file_name = get_top_download(driver).shadow_root.find_element(By.ID, "name").get_attribute("title")
+    file_location = append_cur_dir("Downloads", file_name)
+
+    # begin parsing the activity with a log file open to write info to
+    with open(append_cur_dir("Logging", "xml_log.txt"), 'a') as log:
+        log.write("Opening: " + file_name + " - " + title + "; " + info[0] + "\n")
+        print("\nOpening: " + file_name + " - " + title + "; " + info[0] + "\n")
+        curr_link_xml = etree.parse(file_location, etree.XMLParser(remove_blank_text=True))
+
+        # because of the complications with namespaces with lxml and the fact that only one is ever used,
+        # I am just using the * and local name to avoid the headache and poor documentation
+        # apparently elements come out as [<Element {http://www.w3.org/1999/xhtml}block at 0x7fd7f814e440>]
+        # apparently using .// isn't allowed
+        key = "//*[local-name()='block' and contains(@type, '" + target_expression + "')]//*[local-name()='value' and @name='" + target_name + "']"
+        expressions = curr_link_xml.xpath(key)
+        did_update = False
+        for expression in expressions:
+            container = expression[0]
+            # pure text has simpler handling
+            if container.attrib["type"] == "text":
+                print("Inspecting " + container[0].text + "\n")
+                updated_text = update_pow_expressions(container[0].text)
+                if updated_text != container[0].text:
+                    did_update = True
+                    container[0].text = updated_text
+                    print("Updated to " + updated_text + "\n")
+                continue
+
+            # if the expression isn't pure text or a text combination we can't modify it
+            if container.attrib["type"] != "text_join":
+                log.write("\t Found non-text/text-join element matching expression!\n")
+                continue
+
+            expr_updated = update_expression_container(container)
+            if not did_update: did_update = expr_updated
+
+        if not did_update:
+            log.write("\t ------- No update needed ------- \n")
+            print("No update needed for preceding activity. \n")
+            return  # nothing needed to be changed so we can skip
+        curr_link_xml.write(append_cur_dir("Results", file_name), pretty_print=True)
+        log.write("Finished: " + file_name + " - " + title + "; " + info[0] + "\n")
+        print("Finished: " + file_name + " - " + title + "; " + info[0] + "\n")
+
+    path_components = append_cur_dir("Results", file_name)
+    path_components = path_components[path_components.find("PycharmProjects") : len(path_components)].split(os.sep)
+
+    # go back to activity and load the new xml file
+    open_and_ignore_prompt(driver, link)
+    select_target_type(driver, is_example, target_num)
+    if has_board: open_board(driver, link_info.is_pre())
+
+    # results in either loadBlocks or loadPreBoard or loadPostBoard
+    load_id = "load"
+    if has_board: load_id += board_type
+    else: load_id += "Blocks"
+    goto_and_click(driver, load_id, By.ID)
+
+    # results in either loadBlocksMachine or loadBoardMachine
+    load_id = "load"
+    if has_board: load_id += "Board"
+    else: load_id += "Blocks"
+    load_id += "Machine"
+    load_button = wait_for_vis(driver, load_id, By.NAME)
+
+    # ensure browser is in focus, even though it should always be "on top". Assumes browser farthest right and
+    # assumes the browser is reasonably wide
+    browser_top_x : int = pyautogui.size()[0] * 3 / 4  # guessing the top is roughly 3/4 of the screen
+    browser_top_y : int = 15  # around 15 pixels from the top of the screen
+    prev_x : int = pyautogui.position()[0]
+    prev_y : int = pyautogui.position()[1]
+
+    # focus browser and hold
+    pyautogui.mouseDown(browser_top_x, browser_top_y, button='left')
+    pyautogui.sleep(0.2)
+    pyautogui.mouseUp(button='left')
+    sleep(0.2)  # let the browser realize we don't want to drag it
+
+    pyautogui.moveTo(prev_x, prev_y)  # return to previous position
+    load_button.click()  # must be in focus to open
+
+    # must be in focus to work
+    for file in path_components:
+        sleep(0.5)  # ensure after enter is hit the explorer has time to respond, or when it first opens
+        pyautogui.hotkey('ctrl', 'f')
+        pyautogui.write(file, 0.005)
+        sleep(0.2)  # enforce a manual delay to stop ctrl f and enter being pressed too close together
+        pyautogui.press('enter')
+
+    sleep(0.25)  # let the browser respond to the upload
+    goto_and_click(driver, "//button[text()='Replace existing blocks']")
+
+    # we do not need to save changes to activity if we just changed board- only save part you changed
+    save_activity(driver, is_lesson, board_index)
+    sleep(0.5)  # give saving some time just in case
+
+    print("Finished saving current link.")
+
+
 # will try to replace x^y in drive expressions with pow(x, y) [never in pre or post board]
-def replace_pow(driver : WebDriver, link, info : list[str]):
+def replace_pow_interactive(driver : WebDriver, link, info : list[str]):
     # open the link
     open_and_ignore_prompt(driver, link)
 
@@ -166,7 +302,9 @@ def replace_pow(driver : WebDriver, link, info : list[str]):
         # we use contains so that even selected elements are considered
         parent = curr_text.find_element(By.XPATH, "./..")
         sub_blocks = parent.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyDraggable']")
-        expression_block = sub_blocks[len(sub_blocks) - 2]  # last draggable is next draggable, second to last is expr
+        # expression_block = sub_blocks[len(sub_blocks) - 2]  # last draggable is next draggable, second to last is expr
+        sub_blocks.sort(key=lambda sub_block: get_x_trans(sub_block))  # our target should be furthest right (>> x trans)
+        expression_block = sub_blocks[len(sub_blocks) - 1]
         text_boxes = expression_block.find_elements(By.XPATH, "./child::*[name()='g' and @class='blocklyEditableText']")
 
         for text_box in text_boxes:
@@ -177,6 +315,7 @@ def replace_pow(driver : WebDriver, link, info : list[str]):
 
             # update the expression
             updated_text = update_pow_expressions(text_element.text)
+            if updated_text == text_element.text: continue
             ActionChains(driver).move_to_element(text_element).click().perform()  # go to element and select it
             ActionChains(driver).send_keys(Keys.BACKSPACE).perform()  # acts as if a keystroke was pressed
             ActionChains(driver).send_keys_to_element(text_box, updated_text).perform()  # directly sends keys
@@ -193,30 +332,54 @@ def replace_pow(driver : WebDriver, link, info : list[str]):
 
 def get_action(action_name : str):
     if action_name.upper() == "REPLACE_POW":
-        return replace_pow
+        return replace_pow_interactive
+    elif action_name.upper() == "REPLACE_POW_XML":
+        return replace_pow_xml
 
     return update_models
 
 def parse_by_links(action, target_info, separator):
     driver = init_bare_driver()  # allows images to load properly so they can be selected
     links = []
-    info : list[list[str]] = [[]]
+    info : list[list[str]] = []
 
     # get links from provided link page
-    driver.get("https://roboblocky.com/activity-portal/script_linkbotSymbol.php")
-    ensure_logged_in(driver)
+    source_link : str = "https://www.roboblocky.com/activity-portal/script_drawExprPower.php"
+    start_from_link = None # "https://www.roboblocky.com/u/8407.php"
+    driver.get(source_link)  # useful even if we don't parse from it because we want to make sure user is logged in
 
-    print("Gathering links...")
-    link_elements = wait_and_gets(driver, "//div[@class='row']//a[@target=\'_blank\']", by_val=By.XPATH)
-    for element in link_elements:
-        links.append(element.get_attribute("href"))
-        info.append([element.text])  # we will parse this later
+    # store the link list
+    last_split_index: int = source_link.rfind('/')
+    link_file_dir = append_cur_dir("Logging", source_link[last_split_index + 1: len(source_link) - 4] + ".txt")
+    if os.path.exists(link_file_dir):
+        # read from link file
+        with open(link_file_dir, 'r') as link_file:
+            lines = link_file.readlines()
+            line_count : int = 0
+            while line_count < len(lines):
+                link_line = lines[line_count]
+                info_line = lines[line_count + 1]
+                links.append(link_line[link_line.find("]:") + 3 : len(link_line) - 1])  # ensure to drop \n
+                info.append([info_line[info_line.find('[') + 1 : info_line.rfind(']')].strip('\'')])  # drop '
+
+                # skip the whitespace line
+                line_count += 3
+    else:
+        # parse from list of links
+        print("Gathering links...")
+        link_elements = wait_and_gets(driver, "//div[@class='row']//a[@target=\'_blank\']", by_val=By.XPATH)
+        for element in link_elements:
+            links.append(element.get_attribute("href"))
+            info.append([element.text.strip('\'')])  # we will parse this later
+
+        # write to file
+        with open(link_file_dir, 'a') as link_file:
+            for i in range(0, len(links)):
+                link_file.write("[" + str(i) + "]: " + links[i] + "\n    INFO: " + str(info[i]) + "\n\n")
 
     print("Finished gathering links, pruning now.")
 
     # used to avoid re-doing previously computed work
-    #3244 doesn't have any robots
-    start_from_link = "https://roboblocky.com/u/12901.php" # "https://roboblocky.com/u/780.php" first "fixed up" link
     if start_from_link is not None:
         for i in range(0, len(links)):
             if links[i] == start_from_link:
@@ -226,8 +389,9 @@ def parse_by_links(action, target_info, separator):
 
     # the list automatically shrinks when its been detected as completed?
     print("Finished pruning, beginning looping.")
+    ensure_logged_in(driver)
 
-    links = ["https://roboblocky.com/u/5932.php"]
+    #links = ["https://roboblocky.com/u/5932.php"]
     action = get_action(action)
     #print("All links collected, printing first 20: \n", links[0:20])
     link_index = 0
@@ -312,19 +476,29 @@ def parse_args():
 
     return parser.parse_args()
 
+def do_test() -> bool:
+    return False
+    print(inspect_pow_expressions("0.50*pow((2,x))"))
+    return True
+
 def activity_updater():
     args = parse_args()
     separator = args.sep
     info = args.info
     action = args.action
 
+    if do_test(): return  # only do test
+
     # for now these are just hard set rather than command line
     grades = None # args.grades  -1 -> 16 inclusive range
     chapters = None  # args.ch
 
-    if info is None: info = "drivexyToExpr(x0"  # manually set info
+    if info is None: info = "draw_expr"  # manually set info
 
-    if action is None: action = "replace_pow"  # set default action manually
+    if action is None: action = "replace_pow_xml"  # set default action manually
+
+    if not os.path.exists(append_cur_dir("Logging")): os.mkdir(append_cur_dir("Logging"))
+    if not os.path.exists(append_cur_dir("Results")): os.mkdir(append_cur_dir("Results"))
 
     # ---------------------- START PROCESSING -------------------------- #
 
