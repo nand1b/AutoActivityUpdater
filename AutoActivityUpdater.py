@@ -153,6 +153,7 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
     select_target_type(driver, is_example, target_num)  # open example or solution
 
     # will open the correct board, or none of that is appropriate
+    was_min_view = False
     board_type = None
     board_index : int = 1
     if has_board:
@@ -162,7 +163,7 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
         else:
             board_type = "PostBoard"
             board_index = 3
-        open_board(driver, link_info.is_pre())
+        was_min_view = open_board(driver, link_info.is_pre())
 
     title = driver.title
 
@@ -171,6 +172,7 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
     file_name = get_top_download(driver).shadow_root.find_element(By.ID, "name").get_attribute("title")
     file_location = append_cur_dir("Downloads", file_name)
 
+    parsed_expressions : str = " - Parsed Expressions: \n"
     # begin parsing the activity with a log file open to write info to
     with open(append_cur_dir("Logging", "xml_log.txt"), 'a') as log:
         log.write("Opening: " + file_name + " - " + title + "; " + info[0] + "\n")
@@ -189,11 +191,14 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
             # pure text has simpler handling
             if container.attrib["type"] == "text":
                 print("Inspecting " + container[0].text + "\n")
+                parsed_expressions += "    " + container[0].text
                 updated_text = update_pow_expressions(container[0].text)
                 if updated_text != container[0].text:
                     did_update = True
                     container[0].text = updated_text
                     print("Updated to " + updated_text + "\n")
+                    parsed_expressions += " -> " + updated_text
+                parsed_expressions += "\n"
                 continue
 
             # if the expression isn't pure text or a text combination we can't modify it
@@ -201,15 +206,18 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
                 log.write("\t Found non-text/text-join element matching expression!\n")
                 continue
 
-            expr_updated = update_expression_container(container)
+            container_result = update_expression_container(container)
+            expr_updated = container_result[0]
+            parsed_expressions += container_result[1] + "\n"
             if not did_update: did_update = expr_updated
 
+        log.write(parsed_expressions)
         if not did_update:
-            log.write("\t ------- No update needed ------- \n")
+            log.write("------- No update needed ------- \n\n")
             print("No update needed for preceding activity. \n")
             return  # nothing needed to be changed so we can skip
         curr_link_xml.write(append_cur_dir("Results", file_name), pretty_print=True)
-        log.write("Finished: " + file_name + " - " + title + "; " + info[0] + "\n")
+        log.write("Finished: " + file_name + " - " + title + "; " + info[0] + "\n\n")
         print("Finished: " + file_name + " - " + title + "; " + info[0] + "\n")
 
     path_components = append_cur_dir("Results", file_name)
@@ -263,6 +271,15 @@ def replace_pow_xml(driver : WebDriver, link , info : list[str]):
     # we do not need to save changes to activity if we just changed board- only save part you changed
     save_activity(driver, is_lesson, board_index)
     sleep(0.5)  # give saving some time just in case
+
+    # re-enable min view
+    if was_min_view:
+        driver.get(link)  # re-open after saving
+
+        # check that min view is not already enabled
+        if wait_and_get(driver, "guiButton", By.ID).get_attribute("disabled") is None:
+            goto_and_click(driver, "minView", By.ID)  # click min_view
+            save_activity(driver, is_lesson, 1)  # save the activity
 
     print("Finished saving current link.")
 
@@ -345,7 +362,7 @@ def parse_by_links(action, target_info, separator):
 
     # get links from provided link page
     source_link : str = "https://www.roboblocky.com/activity-portal/script_drawExprPower.php"
-    start_from_link = None # "https://www.roboblocky.com/u/8407.php"
+    start_from_link = "https://www.roboblocky.com/u/12008.php"
     driver.get(source_link)  # useful even if we don't parse from it because we want to make sure user is logged in
 
     # store the link list

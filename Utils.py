@@ -18,7 +18,7 @@ def insert_text_element(container, name, text):
     return text_element
 
 
-def update_expression_container(container : etree.Element) -> bool:
+def update_expression_container(container : etree.Element) -> tuple[bool, str]:
     # text combination handling more complicated
     num_slots = int(container[0].attrib["items"])  # the slots available
     filled_slots = 0
@@ -44,11 +44,14 @@ def update_expression_container(container : etree.Element) -> bool:
         # add the text from this element
         result_text += curr_element[0][0].text
 
+    parsed_expressions : str = "    " + result_text
     print("Inspecting " + result_text + "\n")
-    if result_text.find("^") == -1 and result_text.find("pow") == -1: return False # no power to update
+
+    if result_text.find("^") == -1 and result_text.find("pow") == -1: return False, parsed_expressions  # no power to update
     prev_text = result_text
     result_text = update_pow_expressions(result_text)
-    if prev_text == result_text: return False  # no fixup needed
+    if prev_text == result_text: return False, parsed_expressions  # no fixup needed
+    parsed_expressions += " -> " + result_text  # indicate update for logging
 
     # locate all arguments in the updated expression
     variable_infos: list[list[int]] = []  # store the arg index and start and end char indices
@@ -112,7 +115,7 @@ def update_expression_container(container : etree.Element) -> bool:
     print("\nContainer end: \n")
     prettyprint(container)
     print("\nUpdated to " + result_text + "\n")
-    return True
+    return True, parsed_expressions
 
 # the current directory of this file
 def get_curr_dir():

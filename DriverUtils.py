@@ -16,11 +16,14 @@ def determine_board_type(driver : WebDriver):
 
     return None
 
-def open_board(driver : WebDriver, is_preboard : bool):
+def open_board(driver : WebDriver, is_preboard : bool) -> bool:
     board_name = get_board_id(is_preboard)
+    is_min_view : bool = wait_and_get(driver, 'guiButton', By.ID).get_attribute("disabled") is not None
+    if is_min_view: goto_and_click(driver, "minView", By.ID)
     goto_and_click(driver, "editBoard", By.ID)
     sleep(0.5)  # let the window actually pop up
     goto_and_click(driver, board_name, By.NAME)
+    return is_min_view
 
 def close_board(driver : WebDriver, is_preboard : bool):
     close_id = ""
